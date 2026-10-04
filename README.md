@@ -24,8 +24,8 @@ docker compose down
 | 框架 | React 18 + TypeScript |
 | 构建 | Vite 6（`npm run build` 含 `tsc --noEmit` 类型检查） |
 | UI | Ant Design 5 + @ant-design/icons |
-| 路由 | React Router 6（5 条业务路由 + 404） |
-| 状态 | Zustand（holeStore / runStore / boxStore / lithoStore） |
+| 路由 | React Router 6（6 条业务路由 + 404） |
+| 状态 | Zustand（holeStore / runStore / boxStore / lithoStore / sealStore） |
 | 存储 | IndexedDB（Dexie，库名 `gbdrillcore-db`） |
 | 托管 | nginx:alpine（多阶段构建，SPA try_files + gzip） |
 
@@ -49,28 +49,36 @@ npm run build    # 类型检查 + 生产构建
 │   ├── nginx.conf             # try_files SPA 回退 + gzip
 │   ├── public/favicon.svg
 │   └── src/
-│       ├── types/             # drill-hole / drill-run / core-box / litho-log
-│       ├── stores/            # holeStore / runStore / boxStore / lithoStore
+│       ├── types/             # drill-hole / drill-run / core-box / litho-log / seal
+│       ├── stores/            # holeStore / runStore / boxStore / lithoStore / sealStore
 │       ├── components/common/ # DepthRangeInput / RecoveryBadge / BoxGrid / LithoColumn / StatBadge / FilterBar / EmptyPanel
 │       ├── hooks/             # useHoleFilter / useDepthCalc
-│       ├── pages/             # HoleBoard / HoleList / RunLog / CoreBoxList / LithoEditor
+│       ├── pages/             # HoleBoard / HoleList / RunLog / CoreBoxList / LithoEditor / SealManage
 │       ├── router/index.tsx   # 路由表
-│       └── utils/             # recovery.ts / db.ts / export.ts（+ seed.ts / id.ts）
+│       └── utils/             # recovery / db / export / seal（+ seed.ts / id.ts）
 ```
 
 ## 功能与路由
 
 | 路由 | 页面 | 说明 |
 | --- | --- | --- |
-| `/` | 工作台 | 钻孔进度、设计达成率、未达设计待补勘清单、采取率异常清单（<75% 标红） |
+| `/` | 工作台 | 钻孔进度、设计达成率、未达设计待补勘清单、采取率异常清单（<75% 标红）、封孔合格率与退回补封/待重新确认清单 |
 | `/holes` | 钻孔台帐 | 建孔、坐标与孔口标高、设计/终孔深度、测斜数据、回次深度覆盖与岩芯箱数回显 |
 | `/runs` | 回次记录 | 起止深度自动算进尺与采取率，低于 75% 立即标红并入异常清单 |
 | `/boxes` | 岩芯箱编目 | 格位网格按深度填充、破损格标记、装箱深度连续性与格位容量校验 |
 | `/lithology` | 岩性编录 | 按深度区间编录岩性/蚀变/矿化/RQD/样品，区间重叠报冲突并高亮，SVG 岩性柱状图 |
+| `/seals` | 封孔管理 | 钻探班组管封孔方式/起止深度/水泥用量，地质编录室管终孔深度/矿化段/封孔要求；两边按矿化段对账，未盖住即退回补封，要求改动触发重新确认 |
 
 ## 数据存储说明
 
-- 全部数据存于浏览器 IndexedDB（Dexie，库名 `gbdrillcore-db`），表：`holes`、`runs`、`boxes`、`lithos`、`meta`。
-- `db.version(1)` 建表声明索引；`db.version(2).upgrade(...)` 为岩性表增加 `[holeId+fromDepth]` 复合索引并回填历史 RQD。升级前可用顶栏「导出备份」导出全量 JSON。
-- 首次打开且表为空时写入一批示例编目数据（`src/utils/seed.ts`，5 个钻孔 + 回次 + 岩芯箱 + 岩性区间）。
+- 全部数据存于浏览器 IndexedDB（Dexie，库名 `gbdrillcore-db`），表：`holes`、`runs`、`boxes`、`lithos`、`sealRequirements`、`sealRecords`、`meta`。
+- `db.version(1)` 建表声明索引；`db.version(2).upgrade(...)` 为岩性表增加 `[holeId+fromDepth]` 复合索引并回填历史 RQD；`db.version(3).upgrade(...)` 新增封孔双端两张表，并为老孔按终孔深度回填整孔封闭记录（`legacy` 只读，不另设封孔要求）。升级前可用顶栏「导出备份」导出全量 JSON。
+- 首次打开且表为空时写入一批示例编目数据（`src/utils/seed.ts`，5 个钻孔 + 回次 + 岩芯箱 + 岩性区间 + 封孔双端数据）。
 - 容器无状态：不使用数据库服务、不挂载命名卷，`docker compose down` 后数据仍留在浏览器中。
+
+## 封孔双端对账
+
+- **地质编录室那份**（`sealRequirements`）：终孔深度、需保护矿化段（由矿化岩性段派生）、封孔要求。每次修改版本号 +1，先前判定合格的孔翻为「待重新确认」，工作台合格率一并重算。
+- **钻探班组那份**（`sealRecords`）：封孔方式、封孔起止深度、水泥用量。提交失败后仅本方重试，编录室那份不动。
+- **对账**：按矿化段核对封孔段是否盖住需保护段；未盖住判「退回补封」，班组补封后重新提交；全部盖住且确认版本追平要求版本才判「合格」。
+- **老孔**：升级时按终孔深度回填整孔封闭记录，标记 `legacy` 只读，不可编辑或提交。

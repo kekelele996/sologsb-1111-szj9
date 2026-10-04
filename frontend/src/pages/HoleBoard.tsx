@@ -8,16 +8,21 @@ import FilterBar from '../components/common/FilterBar';
 import { useHoleFilter } from '../hooks/useHoleFilter';
 import { useHoleStore, holeProgressList } from '../stores/holeStore';
 import { useRunStore, anomalyList } from '../stores/runStore';
+import { useSealStore } from '../stores/sealStore';
 import { RIG_NOS, SHIFTS, type HoleProgress } from '../types/drill-hole';
 import type { RunAnomaly } from '../types/drill-run';
+import type { SealReconcile } from '../types/seal';
 import { isAnomaly } from '../utils/recovery';
+import { reconcileSeal, sealQualifiedRate } from '../utils/seal';
 
 const { Title, Paragraph, Text } = Typography;
 
-/** 工作台：钻孔进度与采取率异常清单（低于 75% 标红） */
+/** 工作台：钻孔进度、采取率异常清单、封孔合格率与退回补封清单 */
 export default function HoleBoard() {
   const holes = useHoleStore((s) => s.holes);
   const runs = useRunStore((s) => s.runs);
+  const requirements = useSealStore((s) => s.requirements);
+  const records = useSealStore((s) => s.records);
   const filter = useHoleFilter();
 
   const visibleHoles = useMemo(() => filter.apply(holes), [holes, filter]);
@@ -27,6 +32,24 @@ export default function HoleBoard() {
   const anomalies = useMemo<RunAnomaly[]>(
     () => anomalyList(runs.filter((run) => filter.matchRun(run, holes)), holeNoOf),
     [runs, holes, filter],
+  );
+
+  /** 封孔对账与合格率（按当前筛选后的孔） */
+  const sealReconciles = useMemo<SealReconcile[]>(
+    () =>
+      visibleHoles.map((hole) =>
+        reconcileSeal(
+          hole,
+          requirements.find((r) => r.holeId === hole.id),
+          records.find((r) => r.holeId === hole.id),
+        ),
+      ),
+    [visibleHoles, requirements, records],
+  );
+  const sealRate = useMemo(() => sealQualifiedRate(sealReconciles), [sealReconciles]);
+  const sealExceptions = useMemo(
+    () => sealReconciles.filter((item) => item.status === '退回补封' || item.status === '待重新确认'),
+    [sealReconciles],
   );
 
   const inDrilling = progress.filter((item) => !item.finished).length;
@@ -90,6 +113,45 @@ export default function HoleBoard() {
     { title: '处置建议', render: (_, row) => <Text type="danger">{row.advice}</Text> },
   ];
 
+  const sealColumns: TableColumnsType<SealReconcile> = [
+    {
+      title: '孔号',
+      width: 100,
+      render: (_, row) => <Text strong>{holes.find((h) => h.id === row.holeId)?.holeNo ?? '未知孔'}</Text>,
+    },
+    {
+      title: '状态',
+      width: 120,
+      render: (_, row) => <Tag color={row.status === '退回补封' ? 'red' : 'orange'}>{row.statusText}</Tag>,
+    },
+    {
+      title: '未盖住矿化段(m)',
+      render: (_, row) =>
+        row.uncovered.length > 0 ? (
+          <Space wrap>
+            {row.uncovered.map((s) => (
+              <Tag key={s.id} color="red">
+                {s.fromDepth}~{s.toDepth}m
+              </Tag>
+            ))}
+          </Space>
+        ) : (
+          <Text type="secondary">要求变更待重新确认</Text>
+        ),
+    },
+    {
+      title: '操作',
+      width: 90,
+      render: () => (
+        <Link to="/seals">
+          <Button size="small" type="link">
+            去处理
+          </Button>
+        </Link>
+      ),
+    },
+  ];
+
   return (
     <div>
       <Title level={3} style={{ marginBottom: 4 }}>
@@ -118,6 +180,15 @@ export default function HoleBoard() {
         </Col>
         <Col xs={12} md={6}>
           <StatBadge label="有效采取率" value={avgRecovery} unit="%" status={avgRecovery >= 75 ? 'success' : 'error'} hint="岩芯长度合计 / 进尺合计" />
+        </Col>
+        <Col xs={12} md={6}>
+          <StatBadge
+            label="封孔合格率"
+            value={sealRate.rate}
+            unit="%"
+            status={sealRate.rate >= 90 ? 'success' : sealRate.rate >= 75 ? 'warning' : 'error'}
+            hint={`合格 ${sealRate.qualified} / 有要求 ${sealRate.total}（无要求老孔不计入）`}
+          />
         </Col>
       </Row>
 
@@ -192,6 +263,22 @@ export default function HoleBoard() {
                 {runs.reduce((sum, run) => sum + run.coreLength, 0).toFixed(2)} m
               </Text>
             </Space>
+          </Card>
+          <Card
+            title="封孔异常清单（退回补封 / 待重新确认）"
+            size="small"
+            style={{ marginTop: 16 }}
+            extra={<Tag color={sealExceptions.length ? 'red' : 'green'}>{sealExceptions.length} 条</Tag>}
+          >
+            <Table
+              rowKey={(row) => row.holeId}
+              size="small"
+              columns={sealColumns}
+              dataSource={sealExceptions}
+              pagination={false}
+              scroll={{ x: 560 }}
+              locale={{ emptyText: '封孔对账全部合格，无退回或待确认项' }}
+            />
           </Card>
         </Col>
       </Row>

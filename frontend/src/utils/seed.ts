@@ -3,6 +3,8 @@ import type { DrillHole } from '../types/drill-hole';
 import type { DrillRun } from '../types/drill-run';
 import type { CoreBox } from '../types/core-box';
 import type { LithoLog } from '../types/litho-log';
+import type { SealRecord, SealRequirement } from '../types/seal';
+import { estimateCementKg } from './seal';
 import { footageOf, recoveryOf } from './recovery';
 
 const DAY = 86_400_000;
@@ -167,24 +169,118 @@ export const SEED_LITHOS: LithoLog[] = [
   { id: 'litho-018', holeId: 'hole-005', fromDepth: 11, toDepth: 45, lithology: '花岗闪长岩', color: '灰白色', alteration: '硅化', mineralization: '无', rqd: 87, sampleNo: 'YP-2405-01', logger: '吴倩' },
 ];
 
+/** 封孔要求（地质编录室那份）：hole-002 合格 / hole-003 退回补封 / hole-004 待重新确认 */
+export const SEED_REQUIREMENTS: SealRequirement[] = [
+  {
+    id: 'seal-req-002',
+    holeId: 'hole-002',
+    protectedSections: [
+      { id: 'sec-002-1', fromDepth: 62, toDepth: 168, note: '磁铁矿、黄铜矿' },
+    ],
+    requirement: '矽卡岩/大理岩矿化段必须用水泥浆封孔封闭，封孔段应盖住全部矿化段',
+    version: 1,
+    confirmedVersion: 1,
+    setBy: '陈立',
+    setAt: daysAgo(10),
+    submitStatus: '已提交',
+    submittedAt: daysAgo(9),
+  },
+  {
+    id: 'seal-req-003',
+    holeId: 'hole-003',
+    protectedSections: [
+      { id: 'sec-003-1', fromDepth: 118, toDepth: 320, note: '磁铁矿、黄铁矿' },
+    ],
+    requirement: '矽卡岩磁铁矿化段及大理岩黄铁矿化段必须封孔，封孔段应盖住全部矿化段',
+    version: 1,
+    confirmedVersion: 1,
+    setBy: '吴倩',
+    setAt: daysAgo(4),
+    submitStatus: '已提交',
+    submittedAt: daysAgo(3),
+  },
+  {
+    id: 'seal-req-004',
+    holeId: 'hole-004',
+    protectedSections: [
+      { id: 'sec-004-1', fromDepth: 10, toDepth: 180, note: '磁铁矿' },
+    ],
+    requirement: '花岗闪长岩中磁铁矿化段必须封孔；复核后调整矿化段边界，需重新确认',
+    version: 2,
+    confirmedVersion: 1,
+    setBy: '赵晓峰',
+    setAt: daysAgo(2),
+    submitStatus: '已提交',
+    submittedAt: daysAgo(1),
+  },
+];
+
+/** 封孔记录（钻探班组那份）：hole-002 全孔封闭合格 / hole-003 只封到 200m 被退回 / hole-004 全孔封闭但待重新确认 */
+export const SEAL_RECORDS: SealRecord[] = [
+  {
+    id: 'seal-rec-002',
+    holeId: 'hole-002',
+    method: '水泥浆封孔',
+    fromDepth: 0,
+    toDepth: 250,
+    cementKg: estimateCementKg('水泥浆封孔', 0, 250),
+    team: '甲班',
+    sealedAt: daysAgo(11),
+    recorder: '高振华',
+    submitStatus: '已提交',
+    submittedAt: daysAgo(10),
+  },
+  {
+    id: 'seal-rec-003',
+    holeId: 'hole-003',
+    method: '水泥浆封孔',
+    fromDepth: 0,
+    toDepth: 200,
+    cementKg: estimateCementKg('水泥浆封孔', 0, 200),
+    team: '乙班',
+    sealedAt: daysAgo(3),
+    recorder: '周明',
+    remark: '封至 200m，下部矿化段待补封',
+    submitStatus: '已提交',
+    submittedAt: daysAgo(2),
+  },
+  {
+    id: 'seal-rec-004',
+    holeId: 'hole-004',
+    method: '水泥浆封孔',
+    fromDepth: 0,
+    toDepth: 180,
+    cementKg: estimateCementKg('水泥浆封孔', 0, 180),
+    team: '丙班',
+    sealedAt: daysAgo(17),
+    recorder: '赵晓峰',
+    submitStatus: '已提交',
+    submittedAt: daysAgo(16),
+  },
+];
+
 /** 首次打开（表内无数据）时写入示例数据；已有数据则不动 */
 export async function seedIfEmpty(): Promise<void> {
   const flag = await db.meta.get('seeded');
   if (flag) {
     return;
   }
-  const [holeCount, runCount, boxCount, lithoCount] = await Promise.all([
+  const [holeCount, runCount, boxCount, lithoCount, reqCount, recCount] = await Promise.all([
     db.holes.count(),
     db.runs.count(),
     db.boxes.count(),
     db.lithos.count(),
+    db.sealRequirements.count(),
+    db.sealRecords.count(),
   ]);
 
-  await db.transaction('rw', db.holes, db.runs, db.boxes, db.lithos, db.meta, async () => {
+  await db.transaction('rw', [db.holes, db.runs, db.boxes, db.lithos, db.sealRequirements, db.sealRecords, db.meta], async () => {
     if (holeCount === 0) await db.holes.bulkPut(SEED_HOLES);
     if (runCount === 0) await db.runs.bulkPut(SEED_RUNS);
     if (boxCount === 0) await db.boxes.bulkPut(SEED_BOXES);
     if (lithoCount === 0) await db.lithos.bulkPut(SEED_LITHOS);
+    if (reqCount === 0) await db.sealRequirements.bulkPut(SEED_REQUIREMENTS);
+    if (recCount === 0) await db.sealRecords.bulkPut(SEAL_RECORDS);
     await db.meta.put({ key: 'seeded', value: new Date().toISOString() });
   });
 }
