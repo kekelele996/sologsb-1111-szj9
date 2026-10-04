@@ -8,15 +8,19 @@ export interface BackupPayload {
   runs: unknown[];
   boxes: unknown[];
   lithos: unknown[];
+  sealRequirements?: unknown[];
+  sealRecords?: unknown[];
 }
 
 /** 汇总全部本地表为 JSON 备份（schema 迁移前先导出） */
 export async function buildBackup(): Promise<BackupPayload> {
-  const [holes, runs, boxes, lithos] = await Promise.all([
+  const [holes, runs, boxes, lithos, sealRequirements, sealRecords] = await Promise.all([
     db.holes.toArray(),
     db.runs.toArray(),
     db.boxes.toArray(),
     db.lithos.toArray(),
+    db.sealRequirements.toArray(),
+    db.sealRecords.toArray(),
   ]);
   return {
     app: 'gbdrillcore',
@@ -26,6 +30,8 @@ export async function buildBackup(): Promise<BackupPayload> {
     runs,
     boxes,
     lithos,
+    sealRequirements,
+    sealRecords,
   };
 }
 
@@ -55,10 +61,13 @@ export function downloadCsv<T extends Record<string, unknown>>(
   const body = rows
     .map((row) => columns.map((c) => `"${String(row[c.key] ?? '').replace(/"/g, '""')}"`).join(','))
     .join('\n');
-  downloadText(filename, `\ufeff${header}\n${body}`, 'text/csv');
+  downloadText(filename, `﻿${header}\n${body}`, 'text/csv');
 }
 
-/** 恢复 JSON 备份 */
+/**
+ * 恢复 JSON 备份。旧备份（v2 及以前，无封孔两份数据）恢复后保持原样：
+ * 封孔要求/记录两张表清空，由应用重新打开时按 v3 升级逻辑处理（这里走 Dexie 升级之外的清空兜底）。
+ */
 export async function importBackup(text: string): Promise<{ holes: number; runs: number; boxes: number; lithos: number }> {
   const payload = JSON.parse(text) as Partial<BackupPayload>;
   if (!payload || payload.app !== 'gbdrillcore') {
@@ -70,12 +79,18 @@ export async function importBackup(text: string): Promise<{ holes: number; runs:
     boxes: payload.boxes?.length ?? 0,
     lithos: payload.lithos?.length ?? 0,
   };
-  await db.transaction('rw', db.holes, db.runs, db.boxes, db.lithos, async () => {
-    await Promise.all([db.holes.clear(), db.runs.clear(), db.boxes.clear(), db.lithos.clear()]);
-    if (payload.holes?.length) await db.holes.bulkPut(payload.holes as never[]);
-    if (payload.runs?.length) await db.runs.bulkPut(payload.runs as never[]);
-    if (payload.boxes?.length) await db.boxes.bulkPut(payload.boxes as never[]);
-    if (payload.lithos?.length) await db.lithos.bulkPut(payload.lithos as never[]);
-  });
+  await db.transaction(
+    'rw',
+    [db.holes, db.runs, db.boxes, db.lithos, db.sealRequirements, db.sealRecords],
+    async () => {
+      await Promise.all([db.holes.clear(), db.runs.clear(), db.boxes.clear(), db.lithos.clear(), db.sealRequirements.clear(), db.sealRecords.clear()]);
+      if (payload.holes?.length) await db.holes.bulkPut(payload.holes as never[]);
+      if (payload.runs?.length) await db.runs.bulkPut(payload.runs as never[]);
+      if (payload.boxes?.length) await db.boxes.bulkPut(payload.boxes as never[]);
+      if (payload.lithos?.length) await db.lithos.bulkPut(payload.lithos as never[]);
+      if (payload.sealRequirements?.length) await db.sealRequirements.bulkPut(payload.sealRequirements as never[]);
+      if (payload.sealRecords?.length) await db.sealRecords.bulkPut(payload.sealRecords as never[]);
+    },
+  );
   return counts;
 }

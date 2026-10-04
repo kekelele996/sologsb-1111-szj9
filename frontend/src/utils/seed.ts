@@ -3,7 +3,9 @@ import type { DrillHole } from '../types/drill-hole';
 import type { DrillRun } from '../types/drill-run';
 import type { CoreBox } from '../types/core-box';
 import type { LithoLog } from '../types/litho-log';
+import type { SealRecord, SealRequirement } from '../types/sealing';
 import { footageOf, recoveryOf } from './recovery';
+import { requirementSignature } from './sealing';
 
 const DAY = 86_400_000;
 const daysAgo = (n: number) => new Date(Date.now() - n * DAY).toISOString();
@@ -43,7 +45,7 @@ export const SEED_HOLES: DrillHole[] = [
       { id: 'sv-002-1', depth: 80, dip: 89.1, azimuth: 128 },
       { id: 'sv-002-2', depth: 180, dip: 87.8, azimuth: 129.4 },
     ],
-    remark: '已终孔并完成编录',
+    remark: '已终孔并完成编录；终孔报告封孔：0~250m，水泥 11.5t',
   },
   {
     id: 'hole-003',
@@ -167,24 +169,157 @@ export const SEED_LITHOS: LithoLog[] = [
   { id: 'litho-018', holeId: 'hole-005', fromDepth: 11, toDepth: 45, lithology: '花岗闪长岩', color: '灰白色', alteration: '硅化', mineralization: '无', rqd: 87, sampleNo: 'YP-2405-01', logger: '吴倩' },
 ];
 
+/**
+ * 封孔分账示例（编录室要求 / 班组记录各一张表）：
+ * - ZK-2402：编录室封孔要求改版到 v2（矿化段封闭），班组 v1 的合格判定待重新确认；
+ *   另有旧终孔报告一句式的旧封孔留证（与要求对不上，只读）。
+ * - ZK-2403：班组封孔段只盖住部分矿化段（205~320m 未盖），已退回补封，编录室要求保留。
+ * - ZK-2404：老孔升级回填的整孔封闭要求，旧封孔记录 0~180m 与回填一致，只读留证。
+ * - ZK-2401 / ZK-2405：未终孔，无封孔要求。
+ */
+export const SEED_SEAL_REQUIREMENTS: SealRequirement[] = [
+  {
+    id: 'sealreq-002',
+    holeId: 'hole-002',
+    finalDepth: 250,
+    mineralRanges: [
+      { from: 62, to: 168 },
+      { from: 168, to: 250 },
+    ],
+    sealKind: '矿化段封闭',
+    requiredRanges: [
+      { from: 62, to: 168 },
+      { from: 168, to: 250 },
+    ],
+    version: 2,
+    source: 'logging',
+    logger: '陈立',
+    signature: requirementSignature(250, [
+      { from: 62, to: 168 },
+      { from: 168, to: 250 },
+    ], [
+      { from: 62, to: 168 },
+      { from: 168, to: 250 },
+    ]),
+    createdAt: daysAgo(11),
+    updatedAt: daysAgo(2),
+    remark: '封孔要求由整孔封闭调整为矿化段封闭，原合格孔需重新确认',
+  },
+  {
+    id: 'sealreq-003',
+    holeId: 'hole-003',
+    finalDepth: 320,
+    mineralRanges: [{ from: 118, to: 320 }],
+    sealKind: '矿化段封闭',
+    requiredRanges: [{ from: 118, to: 320 }],
+    version: 1,
+    source: 'logging',
+    logger: '吴倩',
+    signature: requirementSignature(320, [{ from: 118, to: 320 }], [{ from: 118, to: 320 }]),
+    createdAt: daysAgo(4),
+    updatedAt: daysAgo(4),
+    remark: '保护矽卡岩磁铁矿段与黄铁矿段',
+  },
+  {
+    id: 'sealreq-004',
+    holeId: 'hole-004',
+    finalDepth: 180,
+    mineralRanges: [],
+    sealKind: '整孔封闭',
+    requiredRanges: [{ from: 0, to: 180 }],
+    version: 1,
+    source: 'legacy-backfill',
+    logger: '系统回填',
+    signature: requirementSignature(180, [], [{ from: 0, to: 180 }]),
+    createdAt: daysAgo(17),
+    updatedAt: daysAgo(17),
+    remark: '老孔无封孔要求，升级时按终孔深度回填为整孔封闭',
+  },
+];
+
+export const SEED_SEAL_RECORDS: SealRecord[] = [
+  // ZK-2402：v1 整孔封闭时判定合格，要求升到 v2 后待重新确认；旧终孔报告留证只读
+  {
+    id: 'sealrec-002-1',
+    holeId: 'hole-002',
+    method: '全孔水泥封闭',
+    segments: [{ id: 'seg-002-1', fromDepth: 0, toDepth: 250, cementTons: 11.5 }],
+    verdict: 'qualified',
+    matchedVersion: 1,
+    checkedAt: daysAgo(10),
+    sealedAt: daysAgo(11),
+    shift: '甲班',
+    operator: '高振华',
+    remark: '终孔后全孔水泥封闭',
+  },
+  {
+    id: 'sealrec-002-legacy',
+    holeId: 'hole-002',
+    method: '全孔水泥封闭',
+    segments: [{ id: 'seg-002-l', fromDepth: 0, toDepth: 250, cementTons: 11.5 }],
+    verdict: 'qualified',
+    matchedVersion: 0,
+    checkedAt: daysAgo(12),
+    sealedAt: daysAgo(12),
+    shift: '甲班',
+    operator: '旧终孔报告',
+    legacy: true,
+    remark: '升级前终孔报告中的一句式封孔记录，只读留证',
+  },
+  // ZK-2403：矿化段 118~320m 只封到 205m，205~320m 未盖住，退回补封
+  {
+    id: 'sealrec-003-1',
+    holeId: 'hole-003',
+    method: '分段水泥封闭',
+    segments: [{ id: 'seg-003-1', fromDepth: 118, toDepth: 205, cementTons: 4.6 }],
+    verdict: 'rejected',
+    matchedVersion: 1,
+    uncoveredAtCheck: [{ from: 205, to: 320 }],
+    checkedAt: daysAgo(3),
+    sealedAt: daysAgo(4),
+    shift: '乙班',
+    operator: '周明',
+    remark: '只封了矽卡岩段，大理岩黄铁矿段未封，退回补封',
+  },
+  // ZK-2404：老孔旧记录与回填的整孔封闭一致，只读留证
+  {
+    id: 'sealrec-004-legacy',
+    holeId: 'hole-004',
+    method: '全孔水泥封闭',
+    segments: [{ id: 'seg-004-l', fromDepth: 0, toDepth: 180, cementTons: 8.2 }],
+    verdict: 'qualified',
+    matchedVersion: 0,
+    checkedAt: daysAgo(18),
+    sealedAt: daysAgo(18),
+    shift: '丙班',
+    operator: '旧终孔报告',
+    legacy: true,
+    remark: '升级前的旧封孔记录，与整孔封闭回填一致，只读留证',
+  },
+];
+
 /** 首次打开（表内无数据）时写入示例数据；已有数据则不动 */
 export async function seedIfEmpty(): Promise<void> {
   const flag = await db.meta.get('seeded');
   if (flag) {
     return;
   }
-  const [holeCount, runCount, boxCount, lithoCount] = await Promise.all([
+  const [holeCount, runCount, boxCount, lithoCount, sealReqCount, sealRecCount] = await Promise.all([
     db.holes.count(),
     db.runs.count(),
     db.boxes.count(),
     db.lithos.count(),
+    db.sealRequirements.count(),
+    db.sealRecords.count(),
   ]);
 
-  await db.transaction('rw', db.holes, db.runs, db.boxes, db.lithos, db.meta, async () => {
+  await db.transaction('rw', [db.holes, db.runs, db.boxes, db.lithos, db.sealRequirements, db.sealRecords, db.meta], async () => {
     if (holeCount === 0) await db.holes.bulkPut(SEED_HOLES);
     if (runCount === 0) await db.runs.bulkPut(SEED_RUNS);
     if (boxCount === 0) await db.boxes.bulkPut(SEED_BOXES);
     if (lithoCount === 0) await db.lithos.bulkPut(SEED_LITHOS);
+    if (sealReqCount === 0) await db.sealRequirements.bulkPut(SEED_SEAL_REQUIREMENTS);
+    if (sealRecCount === 0) await db.sealRecords.bulkPut(SEED_SEAL_RECORDS);
     await db.meta.put({ key: 'seeded', value: new Date().toISOString() });
   });
 }

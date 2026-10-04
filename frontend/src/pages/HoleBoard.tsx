@@ -8,9 +8,13 @@ import FilterBar from '../components/common/FilterBar';
 import { useHoleFilter } from '../hooks/useHoleFilter';
 import { useHoleStore, holeProgressList } from '../stores/holeStore';
 import { useRunStore, anomalyList } from '../stores/runStore';
+import { useRequirementStore } from '../stores/sealRequirementStore';
+import { useSealRecordStore } from '../stores/sealRecordStore';
 import { RIG_NOS, SHIFTS, type HoleProgress } from '../types/drill-hole';
 import type { RunAnomaly } from '../types/drill-run';
+import { RECONCILE_STATUS_META, type SealReconcile } from '../types/sealing';
 import { isAnomaly } from '../utils/recovery';
+import { reconcileHole, summarizeSeals } from '../utils/sealing';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -18,10 +22,24 @@ const { Title, Paragraph, Text } = Typography;
 export default function HoleBoard() {
   const holes = useHoleStore((s) => s.holes);
   const runs = useRunStore((s) => s.runs);
+  const sealRequirements = useRequirementStore((s) => s.requirements);
+  const sealRecords = useSealRecordStore((s) => s.records);
   const filter = useHoleFilter();
 
   const visibleHoles = useMemo(() => filter.apply(holes), [holes, filter]);
   const progress = useMemo(() => holeProgressList(visibleHoles, runs), [visibleHoles, runs]);
+
+  // 封孔对账（合格率随封孔要求改版、补封重报实时重算）
+  const visibleIds = useMemo(() => new Set(visibleHoles.map((h) => h.id)), [visibleHoles]);
+  const sealReconciles = useMemo<SealReconcile[]>(
+    () =>
+      holes
+        .filter((h) => visibleIds.has(h.id))
+        .map((hole) => reconcileHole(sealRequirements.find((r) => r.holeId === hole.id), sealRecords.filter((r) => r.holeId === hole.id))),
+    [holes, visibleIds, sealRequirements, sealRecords],
+  );
+  const sealSummary = useMemo(() => summarizeSeals(sealReconciles), [sealReconciles]);
+  const sealAttention = sealReconciles.filter((r) => r.status === 'rejected' || r.status === 'stale');
 
   const holeNoOf = (holeId: string) => holes.find((h) => h.id === holeId)?.holeNo ?? '未知孔';
   const anomalies = useMemo<RunAnomaly[]>(
@@ -62,6 +80,16 @@ export default function HoleBoard() {
         ) : (
           <Tag color="blue">在钻</Tag>
         ),
+    },
+    {
+      title: '封孔对账',
+      width: 130,
+      render: (_, row) => {
+        const rec = sealReconciles.find((r) => r.holeId === row.hole.id);
+        if (!rec || rec.status === 'no-requirement') return <Tag>无要求</Tag>;
+        const meta = RECONCILE_STATUS_META[rec.status];
+        return <Tag color={meta.color}>{meta.label}</Tag>;
+      },
     },
     {
       title: '操作',
@@ -121,6 +149,59 @@ export default function HoleBoard() {
         </Col>
       </Row>
 
+      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+        <Col xs={12} md={6}>
+          <StatBadge
+            label="封孔合格率"
+            value={sealSummary.rate}
+            unit="%"
+            status={sealSummary.rate >= 90 ? 'success' : sealSummary.rate >= 60 ? 'warning' : 'error'}
+            hint="合格孔 / 已提封孔要求孔；要求改版后一并重算，旧留证不计入"
+          />
+        </Col>
+        <Col xs={12} md={6}>
+          <StatBadge label="封孔合格" value={sealSummary.qualified} unit={`/ ${sealSummary.requiredCount} 孔`} status="success" />
+        </Col>
+        <Col xs={12} md={6}>
+          <StatBadge label="退回补封" value={sealSummary.rejected} unit="孔" status={sealSummary.rejected ? 'error' : 'success'} hint="保护矿化段没被封孔段盖住，班组那条退回，编录室要求保留" />
+        </Col>
+        <Col xs={12} md={6}>
+          <StatBadge label="待重新确认 / 待封孔" value={`${sealSummary.stale} / ${sealSummary.waiting}`} unit="孔" status={sealSummary.stale ? 'warning' : 'default'} hint="封孔要求改版后原合格孔需重新确认 / 班组尚未报封孔" />
+        </Col>
+      </Row>
+
+      {sealAttention.length > 0 ? (
+        <Alert
+          style={{ marginBottom: 16 }}
+          type={sealSummary.rejected > 0 ? 'error' : 'warning'}
+          showIcon
+          message={
+            sealSummary.rejected > 0
+              ? `封孔对账：${sealSummary.rejected} 个孔保护矿化段未被封孔段盖住，班组记录已退回补封；${sealSummary.stale} 个孔因要求改版待重新确认。合格率已重算为 ${sealSummary.rate}%。`
+              : `封孔要求改版后，${sealSummary.stale} 个先前合格的孔待重新确认，合格率已重算为 ${sealSummary.rate}%。`
+          }
+          description={
+            <Space wrap>
+              {sealAttention.map((rec) => {
+                const hole = holes.find((h) => h.id === rec.holeId);
+                const meta = RECONCILE_STATUS_META[rec.status];
+                return (
+                  <Tag key={rec.holeId} color={meta.color}>
+                    {hole?.holeNo}：{meta.label}
+                    {rec.status === 'rejected' ? `（未盖 ${rec.uncovered.map((u) => `${u.from}~${u.to}m`).join('、')}）` : ''}
+                  </Tag>
+                );
+              })}
+              <Link to="/sealing">
+                <Button size="small" type="link">
+                  去封孔对账
+                </Button>
+              </Link>
+            </Space>
+          }
+        />
+      ) : null}
+
       {supplement.length > 0 ? (
         <Alert
           style={{ marginBottom: 16 }}
@@ -158,7 +239,7 @@ export default function HoleBoard() {
               columns={progressColumns}
               dataSource={progress}
               pagination={{ pageSize: 6, hideOnSinglePage: true }}
-              scroll={{ x: 980 }}
+              scroll={{ x: 1120 }}
             />
           </Card>
         </Col>
